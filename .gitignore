@@ -1,6 +1,8 @@
-.DS_Store
+*.DS_Store
 .vscode
 .ipynb_checkpoints
 log
 src/.mypy_cache
 src/.vscode
+*__pycache__/
+*nohup.out

@@ -592,7 +592,7 @@ class DatasetE2E(DatasetBase):
     """Print out a test batch"""
     if(fd is None): 
       print_range = np.random.choice(
-        len(batch['keys']), 5, replace=False)
+        len(batch['keys']), 5, replace=True)
     else: print_range = range(len(batch['keys']))
 
     out = '' 

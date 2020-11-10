@@ -94,6 +94,9 @@ class LatentTemplateCRFARModel(FTModel):
       batch_c, batch = batch
     else:
       batch_c = batch
+    
+    print("batch")
+    print(batch)
 
     with torch.no_grad():
       out_dict = {}

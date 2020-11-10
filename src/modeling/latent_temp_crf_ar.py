@@ -593,6 +593,8 @@ class LatentTemplateCRFAR(nn.Module):
       out_dict
     """
     out_dict = {}
+    print("keys shape")
+    print(keys.shape)
     batch_size = keys.size(0)
     mem_len = keys.size(1)
     state_size = self.state_size
