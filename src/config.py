@@ -49,7 +49,7 @@ class Config:
     self.max_dec_len = {'e2e': 38, 'ptb': 40, 'mscoco': 16} 
     self.max_bow_len = {'e2e': 37, 'ptb': 39, 'mscoco': 16}
     self.max_mem_len = 16 # 99% 
-
+    
     self.pad_id = 0
     self.start_id = 1
     self.end_id = 2
@@ -116,7 +116,7 @@ class Config:
         'tau', 'x_lambd', 'z_sample_max',
         'reward', 'learning_signal', 
         'p_log_prob', 'p_log_prob_x', 'p_log_prob_z', 'z_acc', 'ppl', 'marginal', 
-        'ent_z', 'ent_z_loss', 
+        'ent_z', 'ent_z_loss', 'pr_val', 'pr_loss',
         'g_mean', 'g_std', 'g_r'
         ],
       'rnnlm': [
@@ -215,6 +215,11 @@ class Config:
     # anneal word dropout
     self.x_lambd_start_epoch = 10
     self.x_lambd_anneal_epoch = 2
+    
+    # pr 
+    self.pr = False
+    self.pr_lambd = None
+    self.num_pr_constraints = 7
 
     # decoding 
     self.z_pred_strategy = 'greedy'

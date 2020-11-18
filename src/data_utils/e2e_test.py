@@ -67,5 +67,6 @@ for _ in range(num_batches):
   for k in batch: 
     if(np.isnan(np.sum(batch[k]))):
       print(batch)
-  
+
 dset.print_batch(batch)
+

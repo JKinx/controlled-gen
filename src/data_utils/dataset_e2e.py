@@ -10,7 +10,9 @@ from collections import defaultdict
 from .dataset_base import DatasetBase
 from . import nlp_pipeline as nlpp
 
-def normalize_set(dset, word2id, max_sent_len, max_mem_len):
+import pickle
+
+def normalize_set(dset, word2id, max_sent_len, max_mem_len, word2id_zcs):
   """Normalize the train/ dev/ test set
   
   Args:
@@ -21,8 +23,12 @@ def normalize_set(dset, word2id, max_sent_len, max_mem_len):
   """
   data_sents = [d[1] for d in dset]
   data_templates = [d[2] for d in dset]
+  
+  # z_constraints
+  data_zcs = [d[3] for d in dset]
+
   set_keys, set_vals = [], []
-  for tb, _, _ in dset:
+  for tb, _, _, _ in dset:
     keys = [k for k, _ in tb]
     set_keys.append(keys)
     vals = [v for _, v in tb]
@@ -33,7 +39,11 @@ def normalize_set(dset, word2id, max_sent_len, max_mem_len):
     set_vals, word2id, max_mem_len, add_start_end=False)
   sentences, sent_lens = nlpp.normalize(data_sents, word2id, max_sent_len)
   templates, _ = nlpp.normalize(data_templates, word2id, max_sent_len)
-  return set_keys, set_vals, set_lens, sentences, templates, sent_lens
+    
+  # z_constraints
+  zcs, _ = nlpp.normalize(data_zcs, word2id_zcs, max_sent_len)
+
+  return set_keys, set_vals, set_lens, sentences, templates, sent_lens, zcs
 
 def read_data(dpath):
   """Read the raw e2e data
@@ -55,7 +65,7 @@ def read_data(dpath):
     reader = csv.reader(fd)
     lines = [l for l in reader]
     lines = lines[1:]
-
+    
   dataset = []
   for l in tqdm(lines):
     t = l[0].lower().split(', ')
@@ -81,8 +91,11 @@ def read_data(dpath):
           break
       if(in_table == False):
         st.append(w)
+        
+    # z_contraints
+    zc = l[2].split(" ")
     
-    dataset.append((t, s, st))
+    dataset.append((t, s, st, zc))
   print("%d cases" % len(dataset))
   return dataset
 
@@ -100,6 +113,7 @@ def prepare_inference(keys, vals, sents, pad_id=0):
     references: 
   """
   keys_inf, vals_inf, mem_lens, references = [], [], [], []
+#   pickle.dump({"k":keys, "v":vals, "s":sents}, open("pi.pkl", "wb"))
   i = 0
   for k, v, s in zip(keys, vals, sents):
     if(i == 0):
@@ -108,18 +122,19 @@ def prepare_inference(keys, vals, sents, pad_id=0):
       prev_v = v
       i += 1
     else:
-      k_ = ' '.join(str(ki) for ki in k)
-      kp = ' '.join(str(ki) for ki in prev_k)
-      if(k_ == kp): r.append(s[1:])
-      else: 
-        keys_inf.append(prev_k)
-        vals_inf.append(prev_v)
-        mem_lens.append(np.sum(np.array(prev_k) != pad_id))
-        references.append(r)
+#       k_ = ' '.join(str(ki) for ki in k)
+#       kp = ' '.join(str(ki) for ki in prev_k)
+#       if(k_ == kp): r.append(s[1:])
+#       else: 
+        
+      keys_inf.append(prev_k)
+      vals_inf.append(prev_v)
+      mem_lens.append(np.sum(np.array(prev_k) != pad_id))
+      references.append(r)
 
-        r = [s[1:]]
-        prev_k = k
-        prev_v = v
+      r = [s[1:]]
+      prev_k = k
+      prev_v = v
 
   keys_inf.append(prev_k)
   vals_inf.append(prev_v)
@@ -131,6 +146,8 @@ class DatasetE2E(DatasetBase):
 
   def __init__(self, config):
     super(DatasetE2E, self).__init__()
+    
+    pickle.dump(config, open("config.pkl", "wb"))
     self.model_name = config.model_name
     self.task = config.task
     self.data_path = config.data_path['e2e']
@@ -139,6 +156,8 @@ class DatasetE2E(DatasetBase):
     self.pad_id = config.pad_id
     self.key2id = {}
     self.id2key = {}
+    self.val2id = {}
+    self.id2val = {}
     self.max_sent_len = config.max_sent_len
     self.max_mem_len = config.max_mem_len
     self.max_bow_len = config.max_bow_len
@@ -150,6 +169,8 @@ class DatasetE2E(DatasetBase):
     self._dataset = {"train": None, "dev": None, "test": None}
     self._ptr = {"train": 0, "dev": 0, "test": 0}
     self._reset_ptr = {"train": False, "dev": False, "test": False}
+    
+    self.num_pr_constraints = config.num_pr_constraints
     return 
 
   @property
@@ -203,26 +224,44 @@ class DatasetE2E(DatasetBase):
     word2id, id2word, _ = nlpp.build_vocab(train_sents, 
       word2id=self.word2id, id2word=self.id2word, vocab_size_threshold=1)
     train_keys = []
-    for tb, _, _ in trainset:
+    train_vals = []
+    for tb, _, _, _ in trainset:
       keys = [k for k, _ in tb]
       train_keys.extend(keys)
+      vals = [v for _, v in tb]
+      train_vals.extend(vals)
     # join key vocab and the word vocab, but keep a seperate key dict
     self.word2id, self.id2word, self.key2id, self.id2key =\
       nlpp.extend_vocab_with_keys(word2id, id2word, train_keys)
+    
+    # join vals vocab and the word vocab, but keep a seperate key dict
+    self.word2id, self.id2word, self.val2id, self.id2val =\
+      nlpp.extend_vocab_with_keys(self.word2id, self.id2word, train_vals)
+    
+    word2id_zcs = {"-1" : self.num_pr_constraints, 
+                   '_PAD': self.num_pr_constraints, '_GOO': self.num_pr_constraints, 
+                   '_EOS': self.num_pr_constraints, '_UNK': self.num_pr_constraints, 
+                   '_SEG': self.num_pr_constraints}
+    for z_id in range(self.num_pr_constraints):
+      word2id_zcs[str(z_id)] = z_id
 
     ## normalize the dataset 
     (train_keys, train_vals, train_mem_lens, train_sentences, train_templates, 
-      train_sent_lens) = normalize_set(
-        trainset, self.word2id, max_sent_len, max_mem_len)
+      train_sent_lens, train_zcs) = normalize_set(
+        trainset, self.word2id, max_sent_len, max_mem_len, word2id_zcs)
     train_bow = [nlpp.sent_to_bow(s, self.max_bow_len) for s in train_sentences]
     (dev_keys, dev_vals, dev_mem_lens, dev_sentences, dev_templates, 
-      dev_sent_lens) = normalize_set(
-        devset, self.word2id, max_sent_len, max_mem_len)
+      dev_sent_lens, dev_zcs) = normalize_set(
+        devset, self.word2id, max_sent_len, max_mem_len, word2id_zcs)
     dev_bow = [nlpp.sent_to_bow(s, self.max_bow_len) for s in dev_sentences]
     (test_keys, test_vals, test_mem_lens, test_sentences, test_templates, 
-      test_sent_lens) = normalize_set(
-        testset, self.word2id, max_sent_len, max_mem_len)
+      test_sent_lens, test_zcs) = normalize_set(
+        testset, self.word2id, max_sent_len, max_mem_len, word2id_zcs)
     test_bow = [nlpp.sent_to_bow(s, self.max_bow_len) for s in test_sentences]
+    
+    print("train_len %i" % len(train_keys))
+    print("dev_len %i" % len(dev_keys))
+    print("test_len %i" % len(test_keys))
 
     ## Prepare the inference format
     dev_keys_inf, dev_vals_inf, dev_lens_inf, dev_references =\
@@ -240,7 +279,8 @@ class DatasetE2E(DatasetBase):
                         'sent_lens': train_sent_lens,
                         'keys': train_keys,
                         'vals': train_vals,
-                        'mem_lens': train_mem_lens}, 
+                        'mem_lens': train_mem_lens,
+                        'zcs' : train_zcs}, 
                       "dev_casewise": { 
                         'sentences': dev_sentences,
                         'sent_bow': dev_bow, 
@@ -248,12 +288,14 @@ class DatasetE2E(DatasetBase):
                         'sent_lens': dev_sent_lens,
                         'keys': dev_keys,
                         'vals': dev_vals,
-                        'mem_lens': dev_mem_lens}, 
+                        'mem_lens': dev_mem_lens,
+                        'zcs' : dev_zcs}, 
                       'dev': {
                         'keys': dev_keys_inf,
                         'vals': dev_vals_inf,
                         'mem_lens': dev_lens_inf, 
-                        'references': dev_references},
+                        'references': dev_references,
+                        'zcs' : dev_zcs},
                       "test_casewise": { 
                         'sentences': test_sentences,
                         'sent_bow': test_bow, 
@@ -261,12 +303,14 @@ class DatasetE2E(DatasetBase):
                         'sent_lens': test_sent_lens,
                         'keys': test_keys,
                         'vals': test_vals,
-                        'mem_lens': test_mem_lens},
+                        'mem_lens': test_mem_lens,
+                        'zcs' : test_zcs},
                       'test': {
                         'keys': test_keys_inf,
                         'vals': test_vals_inf,
                         'mem_lens': test_lens_inf, 
-                        'references': test_references}
+                        'references': test_references,
+                        'zcs' : test_zcs}
                       }
     return 
 
@@ -278,6 +322,7 @@ class DatasetE2E(DatasetBase):
     keys = self._dataset[setname]['keys'][ptr: ptr + batch_size]
     vals = self._dataset[setname]['vals'][ptr: ptr + batch_size]
     mem_lens = self._dataset[setname]['mem_lens'][ptr: ptr + batch_size]
+    zcs = self._dataset[setname]['zcs'][ptr: ptr + batch_size]
 
     batch = {'sentences': np.array(sentences),
              'sent_bow': np.array(sent_bow),
@@ -285,7 +330,8 @@ class DatasetE2E(DatasetBase):
              'sent_lens': np.array(sent_lens), # sent_len + _GOO 
              'keys': np.array(keys),
              'vals': np.array(vals),
-             'mem_lens': np.array(mem_lens)}
+             'mem_lens': np.array(mem_lens),
+             'zcs': np.array(zcs)}
     return batch
 
   def next_batch_infer(self, setname, ptr, batch_size):
@@ -293,11 +339,13 @@ class DatasetE2E(DatasetBase):
     vals = self._dataset[setname]['vals'][ptr: ptr + batch_size]
     mem_lens = self._dataset[setname]['mem_lens'][ptr: ptr + batch_size]
     references = self._dataset[setname]['references'][ptr: ptr + batch_size]
+    zcs = self._dataset[setname]['zcs'][ptr: ptr + batch_size]
 
     batch = {'keys': np.array(keys),
              'vals': np.array(vals),
              'mem_lens': np.array(mem_lens), 
-             'references': references}
+             'references': references,
+             'zcs': np.array(zcs)}
     return batch
 
   def next_batch(self, setname, batch_size):
@@ -470,6 +518,8 @@ class DatasetE2E(DatasetBase):
 
   def print_inspect(self, inspect, batch, model_name, do_not_print=False):
     """Print the model inspection, for monitoring training"""
+    
+    do_not_print = True
     out = ''
 
     if('z_sample_ids' in inspect): 
@@ -590,50 +640,52 @@ class DatasetE2E(DatasetBase):
   def print_batch(self, batch, 
     out_dict=None, model_name=None, fd=None, fd_full=None):
     """Print out a test batch"""
-    if(fd is None): 
-      print_range = np.random.choice(
-        len(batch['keys']), 5, replace=True)
-    else: print_range = range(len(batch['keys']))
+    
 
-    out = '' 
-    pred_out = ''
-    post_out = ''
+#     if(fd is None): 
+#       print_range = np.random.choice(
+#         len(batch['keys']), 5, replace=False)
+#     else: print_range = range(len(batch['keys']))
 
-    print('debug: print_range %d' % len(print_range))
-    for i in print_range:
-      out += 'mem:\n'
-      for k, v in zip(batch['keys'][i][: batch['mem_lens'][i]], 
-        batch['vals'][i][: batch['mem_lens'][i]]):
-        out += self.id2word[k] + ': ' + self.id2word[v] + ' | '
-      out += '\n'
+#     out = '' 
+#     pred_out = ''
+#     post_out = ''
 
-      if('sentences' in batch):
-        out += 'sentence:\n'
-        out += self.decode_sent(batch['sentences'][i]) + '\n'
+#     print('debug: print_range %d' % len(print_range))
+#     for i in print_range:
+#       out += 'mem:\n'
+#       for k, v in zip(batch['keys'][i][: batch['mem_lens'][i]], 
+#         batch['vals'][i][: batch['mem_lens'][i]]):
+#         out += self.id2word[k] + ': ' + self.id2word[v] + ' | '
+#       out += '\n'
 
-      if('references' in batch):
-        out += 'references\n'
-        for j in range(len(batch['references'][i])):
-          out += '%d: ' % j
-          out += self.decode_sent(batch['references'][i][j]) + '\n'
+#       if('sentences' in batch):
+#         out += 'sentence:\n'
+#         out += self.decode_sent(batch['sentences'][i]) + '\n'
 
-      if(out_dict is not None):
-        out += 'predictions:\n'
-        if(model_name.startswith('latent_temp')):
-          s_out = self.decode_sent_w_state(
-            out_dict['predictions'][i], 
-            out_dict['predictions_z'][i]) + '\n'
-          out += s_out
+#       if('references' in batch):
+#         out += 'references\n'
+#         for j in range(len(batch['references'][i])):
+#           out += '%d: ' % j
+#           out += self.decode_sent(batch['references'][i][j]) + '\n'
 
-          s_out = self.decode_sent(out_dict['predictions'][i]) + '\n'
-          pred_out += s_out
+#       if(out_dict is not None):
+#         out += 'predictions:\n'
+#         if(model_name.startswith('latent_temp')):
+#           s_out = self.decode_sent_w_state(
+#             out_dict['predictions'][i], 
+#             out_dict['predictions_z'][i]) + '\n'
+#           out += s_out
+
+#           s_out = self.decode_sent(out_dict['predictions'][i]) + '\n'
+#           pred_out += s_out
           
-      out += '\n\n'
+#       out += '\n\n'
 
-    out += '\n'
-    if(fd is not None): fd.write(pred_out)
-    else: print(out)
+#     out += '\n'
+#     if(fd is not None): fd.write(pred_out)
+#     else: print(out)
 
-    if(fd_full is not None): fd_full.write(out + '\n\n')
+#     if(fd_full is not None): fd_full.write(out + '\n\n')
     return 
   

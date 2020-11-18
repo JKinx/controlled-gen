@@ -22,6 +22,8 @@ from logger import TrainingLog
 from template_manager import TemplateManager
 from tensorboardX import SummaryWriter
 
+import pickle
+
 class Controller(object):
   """Controller for training, validation, and evaluation
 
@@ -41,7 +43,7 @@ class Controller(object):
 
   def __init__(self, config, model, dataset):
     super(Controller, self).__init__()
-
+    self._dataset = dataset
     self.model_name = config.model_name
     self.model_version = config.model_version
     self.inspect_model = config.inspect_model
@@ -95,7 +97,8 @@ class Controller(object):
     self.config = config
     self.use_tensorboard = config.use_tensorboard
     self.write_full = config.write_full_predictions
-    self.save_ckpt = config.save_ckpt
+#     self.save_ckpt = config.save_ckpt
+    self.save_ckpt = True
 
     self.schedule_params = dict()
 
@@ -139,10 +142,16 @@ class Controller(object):
     # TODO: different save function for different models 
     # (if using seperate optimizers)
     save_path = self.model_path + 'ckpt_e%d' % ei
+#     save_path = self.model_path + 'best'
     print('Saving the model at: %s' % save_path)
+#     torch.save(
+#       {'model_state_dict': model.state_dict(), 
+#         'optimizer_state_dict': model.optimizer.state_dict()}, 
+#       save_path)
     torch.save(
       {'model_state_dict': model.state_dict(), 
-        'optimizer_state_dict': model.optimizer.state_dict()}, 
+        'optimizer_state_dict': model.optimizer.state_dict(), 
+        'epoch': ei, "config": self.config, "dataset":self._dataset},
       save_path)
     return 
 
@@ -300,6 +309,7 @@ class Controller(object):
     Args:
       mode: 'dev' or 'test'
     """
+    
     # predictions visualization TBC 
     print('Model %s_%s, epoch %d, n_iter %d, validation on %s set ..' % 
       (self.model_name, self.model_version, ei, n_iter, mode))
@@ -366,9 +376,9 @@ class Controller(object):
       if(bi % 20 == 0): 
         print('.', end=' ', flush=True)
 
-      if('predictions' in out_dict):
-        dataset.print_batch(
-          batch, out_dict, self.model_name, fd, fd_full)
+#       if('predictions' in out_dict):
+#         dataset.print_batch(
+#           batch, out_dict, self.model_name, fd, fd_full)
       
     fd.close()
     if(self.write_full): fd_full.close()
@@ -398,9 +408,9 @@ class Controller(object):
           tensorboard_writer.add_scalar(mode + '/' + n, scores[n], n_iter)
 
       
-    print('')
-    if('predictions' in out_dict and mode == 'dev'):
-      dataset.print_batch(batch, out_dict, self.model_name)
+#     print('')
+#     if('predictions' in out_dict and mode == 'dev'):
+#       dataset.print_batch(batch, out_dict, self.model_name)
     print('validation finished, time: %.2f' % (time() - start_time))
 
     scores['epoch'] = ei 

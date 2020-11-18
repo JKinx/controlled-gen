@@ -55,7 +55,8 @@ class LatentTemplateCRFARModel(FTModel):
         sent_lens=torch.from_numpy(batch['sent_lens']).to(self.device),
         tau=schedule_params['tau'], 
         x_lambd=schedule_params['x_lambd'],
-        return_grad=self.inspect_grad
+        return_grad=self.inspect_grad,
+        zcs=torch.from_numpy(batch['zcs']).to(self.device),
       )
     elif(self.grad_estimator == 'score_func'):
       loss, out_dict = model.forward_score_func(
@@ -94,9 +95,6 @@ class LatentTemplateCRFARModel(FTModel):
       batch_c, batch = batch
     else:
       batch_c = batch
-    
-    print("batch")
-    print(batch)
 
     with torch.no_grad():
       out_dict = {}

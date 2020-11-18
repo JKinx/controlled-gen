@@ -22,6 +22,8 @@ from data_utils.dataset_e2e import DatasetE2E
 from data_utils.dataset_ptb import DatasetPTB
 from data_utils.dataset_mscoco import DatasetMSCOCO
 
+import pickle
+
 def str2bool(v):
   if v.lower() in ('yes', 'true', 't', 'y', '1'):
     return True
@@ -193,6 +195,14 @@ def define_argument(config):
     "--stepwise_score", type=str2bool, 
     nargs='?', const=True, default=config.stepwise_score)
 
+  # pr
+  parser.add_argument(
+    "--pr", type=str2bool, 
+    nargs='?', const=True)
+  parser.add_argument(
+    "--pr_lambd", default=config.z_gamma, type=float)
+  
+
   args = parser.parse_args()
   return args
 
@@ -316,6 +326,9 @@ def main():
     raise NotImplementedError('model %s not implemented!' % config.model_name)  
   tmu.print_params(model)
   # return 
+    
+#   pickle.dump(dataset, open("dataset.pkl", "wb"))
+#   pickle.dump(config, open("config.pkl", "wb"))
 
   # controller
   controller = Controller(config, model, dataset)

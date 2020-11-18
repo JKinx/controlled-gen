@@ -93,7 +93,7 @@ def build_vocab(training_set,
     word2id[w] = i
     id2word[i] = w
     i += 1
-  
+
   assert(len(word2id) == len(id2word))
   print("vocabulary size: %d" % len(word2id))
   return word2id, id2word, vocab
@@ -104,6 +104,8 @@ def extend_vocab_with_keys(word2id, id2word, keys):
   i = len(word2id)
   keys = set(keys)
   for k in keys:
+    if k in word2id.keys():
+      continue
     key2id[k] = i
     id2key[i] = k
     word2id[k] = i
