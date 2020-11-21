@@ -804,7 +804,6 @@ class LatentTemplateCRFAR(nn.Module):
     beams_batch = []
     
     for idx in range(batch_size):
-      print("we are at batch %i" % idx)
       endnodes = []
       number_required = min((topk + 1), topk - len(endnodes))
         

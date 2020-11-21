@@ -141,8 +141,8 @@ class Controller(object):
     """Save the model after epoch"""
     # TODO: different save function for different models 
     # (if using seperate optimizers)
-    save_path = self.model_path + 'ckpt_e%d' % ei
-#     save_path = self.model_path + 'best'
+#     save_path = self.model_path + 'ckpt_e%d' % ei
+    save_path = self.model_path + 'best'
     print('Saving the model at: %s' % save_path)
 #     torch.save(
 #       {'model_state_dict': model.state_dict(), 
