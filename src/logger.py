@@ -6,7 +6,7 @@ class TrainingLog(object):
     self.output_path = config.output_path
 
     self.log = {}
-    for n in config.log_info[config.model_name]:
+    for n in config.log_info:
       self.log[n] = []
     return 
 

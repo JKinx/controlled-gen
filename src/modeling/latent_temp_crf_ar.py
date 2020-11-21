@@ -14,7 +14,7 @@ from .structure.linear_crf import LinearChainCRF
 from . import torch_model_utils as tmu
 import operator
 
-from torch_struct import LinearChainCRF as LC
+from .torch_struct import LinearChainCRF as LC
 
 class LatentTemplateCRFAR(nn.Module):
   """The latent template CRF autoregressive version, table to text setting"""
@@ -31,12 +31,6 @@ class LatentTemplateCRFAR(nn.Module):
     self.use_src_info = config.use_src_info
     self.use_copy = config.use_copy
     self.num_sample = config.num_sample
-
-    self.num_sample_rl = config.num_sample_rl
-    self.z_gamma = config.z_gamma # switching loss
-    self.z_b0 = config.z_b0 # constant baseline
-    self.z_lambd = config.z_lambd # reward scaling
-    self.reward_level = config.reward_level
 
     self.pad_id = config.pad_id
     self.start_id = config.start_id
@@ -164,7 +158,8 @@ class LatentTemplateCRFAR(nn.Module):
       out_dict["z_scores"] = z_emission_scores
         
       # get pr loss
-      pr_loss = self.compute_pr(z_emission_scores, zcs[:, :max_len], sent_mask, sent_lens)
+      pr_loss = self.compute_pr(z_emission_scores, zcs[:, :max_len], 
+                                sent_mask, sent_lens)
       out_dict["pr_val"] = tmu.to_np(pr_loss)
       out_dict["pr_loss"] = self.pr_lambd * tmu.to_np(pr_loss)
       loss -= self.pr_lambd * pr_loss
@@ -256,283 +251,6 @@ class LatentTemplateCRFAR(nn.Module):
     final_loss = loss.sum() / sent_lens.sum()
     
     return final_loss
-  
-  def forward_score_func(self, keys, vals, 
-    sentences, sent_lens, x_lambd, num_sample, return_grad=False):
-    out_dict = {}
-    inspect = {}
-    batch_size = sentences.size(0)
-    device = sentences.device
-    loss = 0.
-
-    ## sentence encoding 
-    sent_mask = sentences != self.pad_id
-    sentences_emb = self.embeddings(sentences)
-    # enc_outputs.shape = [batch, max_len, state_size]
-    enc_outputs, (enc_state_h, enc_state_c) =\
-      self.q_encoder(sentences_emb, sent_lens)
-    # NOTE: max_len != sentences.size(1), max_len = max(sent_lens)
-    max_len = enc_outputs.size(1)
-    sent_mask = sent_mask[:, : max_len]
-
-    # kv encoding 
-    kv_emb, kv_enc, kv_mask = self.encode_kv(keys, vals)
-
-    ## latent template
-    # emission score = log potential
-    # [batch, max_len, latent_vocab]
-    z_emission_scores = self.z_crf_proj(enc_outputs) 
-    if(self.z_overlap_logits):
-      z_emission_scores[:, :-1] += z_emission_scores[:, 1:].clone()
-      z_emission_scores[:, 1:] += z_emission_scores[:, :-1].clone()
-
-    # entropy regularization
-    ent_z = self.z_crf.entropy(z_emission_scores, sent_lens).mean()
-    loss += self.z_beta * ent_z
-    out_dict['ent_z'] = ent_z.item()
-    out_dict['ent_z_loss'] = self.z_beta * ent_z.item()
-
-    # reparameterized sampling
-    z_emission_scores = tmu.batch_repeat(z_emission_scores, num_sample)
-    sent_lens = tmu.batch_repeat(sent_lens, num_sample)
-    z_sample_ids, z_sample, _, z_log_prob, z_transition = self.z_crf.rsample(
-      z_emission_scores, sent_lens, 
-      tau=0.01, return_switching=True, return_prob=True)
-    z_transition = z_transition.view(batch_size, num_sample, -1)
-
-    sent_mask = tmu.batch_repeat(sent_mask, num_sample)
-    out_dict['z_sample_ids'] = tmu.to_np(
-      z_sample_ids.view(batch_size, num_sample, -1)[:, 0])
-    z_sample_max, _ = z_sample.max(dim=-1)
-    z_sample_max = z_sample_max.masked_fill(~sent_mask, 0)
-    inspect['z_sample_max'] = (z_sample_max.sum() / sent_mask.sum()).item()
-    out_dict['z_sample_max'] = inspect['z_sample_max']
-
-    # NOTE: although we use 0 as mask here, 0 is ALSO a valid state 
-    z_sample_ids.masked_fill_(~sent_mask, 0) 
-    z_sample_ids_out = z_sample_ids.masked_fill(~sent_mask, -1)\
-      .view(batch_size, num_sample, -1)
-    inspect['z_sample_ids'] = tmu.to_np(z_sample_ids_out[:, 0])
-    z_sample_emb = tmu.seq_gumbel_encode(z_sample, z_sample_ids,
-      self.z_embeddings, gumbel_st=True)
-
-    # decoding
-    sentences = sentences[:, : max_len]
-    sentences = tmu.batch_repeat(sentences, num_sample)
-    z_sample_ids = z_sample_ids.detach()
-    z_sample_emb = z_sample_emb.detach()
-    keys = tmu.batch_repeat(keys, num_sample)
-    kv_emb = tmu.batch_repeat(kv_emb, num_sample)
-    kv_enc = tmu.batch_repeat(kv_enc, num_sample)
-    kv_mask = tmu.batch_repeat(kv_mask, num_sample)
-    (p_log_prob, p_log_prob_casewise, p_log_prob_x, p_log_prob_z, 
-      z_acc, p_log_prob_stepwise) = self.decode_train(
-        z_sample_ids, z_sample_emb, sent_lens,
-        keys, kv_emb, kv_enc, kv_mask, sentences, x_lambd)
-    out_dict['p_log_prob'] = p_log_prob.item()
-    out_dict['p_log_prob_x'] = p_log_prob_x.item()
-    out_dict['p_log_prob_z'] = p_log_prob_z.item()
-    out_dict['z_acc'] = z_acc.item()
-    loss += p_log_prob
-
-    # score function estimator
-    if(self.reward_level == 'seq'):
-      # sequence level reward
-      p_log_prob_casewise = p_log_prob_casewise.view(batch_size, num_sample)
-      b = p_log_prob_casewise.detach()
-      b = (b.sum(dim=1, keepdim=True) - b) / (num_sample - 1)
-      z_log_prob = z_log_prob.view(batch_size, num_sample)
-      reward_seq = (p_log_prob_casewise - b - self.z_b0).mean().detach()
-      out_dict['reward'] = reward_seq.item()
-      learning_signal_seq =\
-        (p_log_prob_casewise - b - self.z_b0).detach() * z_log_prob
-      learning_signal = self.z_lambd * learning_signal_seq.mean() 
-      out_dict['learning_signal'] = learning_signal.item()
-    elif(self.reward_level == 'step'):
-      max_len = max_len - 1
-      # Stepwise reward, unbiased transition version 
-      p_log_prob_stepcum = p_log_prob_stepwise.view(batch_size, num_sample, 1, -1)
-      p_log_prob_stepcum = p_log_prob_stepcum.repeat(1, 1, max_len, 1)
-      cum_mask = torch.triu(torch.ones(max_len, max_len)).to(device)
-      sent_mask_ = sent_mask.view(
-        batch_size, num_sample, max_len + 1, 1)[:,:,:-1,:]
-      cum_mask = cum_mask.view(1, 1, max_len, max_len) * sent_mask_.float()
-      p_log_prob_stepcum = (p_log_prob_stepcum * cum_mask).sum(-1)
-      # NOTE: does this baseline make sense? 
-      b = p_log_prob_stepcum.detach()
-      b = (b.sum(dim=1, keepdim=True) - b) / (num_sample - 1)
-      learning_signal_step_ut =\
-        (p_log_prob_stepcum - b - self.z_b0).detach() * z_transition[:,:,:-1]
-      reward_step_ut = (p_log_prob_stepcum - b - self.z_b0).mean().detach()
-      out_dict['reward'] = (reward_step_ut + 1e-20).item()
-      learning_signal_step_ut = self.z_lambd * learning_signal_step_ut.mean()
-      out_dict['learning_signal'] = learning_signal_step_ut.item()
-      learning_signal = learning_signal_step_ut
-    else: 
-      raise NotImplementedError(
-        'reward level %s not implemented' % self.reward_level)
-      
-    loss += learning_signal
-
-    # turn maximization to minimization
-    loss = -loss
-
-    if(return_grad):
-      self.zero_grad()
-      g = torch.autograd.grad(
-        loss, z_emission_scores, retain_graph=True)[0]
-      g_mean = g.mean(0)
-      g_std = g.std(0)
-      g_r =\
-        g_std.log() - g_mean.abs().log()
-      out_dict['g_mean'] =\
-        g_mean.abs().log().mean().item()
-      out_dict['g_std'] = g_std.log().mean().item()
-      out_dict['g_r'] = g_r.mean().item()   
-
-    out_dict['loss'] = tmu.to_np(loss)
-    out_dict['inspect'] = inspect
-    return loss, out_dict
-
-  def forward_lm(self, sentences, sent_lens):
-    out_dict = {}
-
-    # sent_mask = sentences != self.pad_id
-    sentences_emb = self.embeddings(sentences)
-    dec_cell = self.p_decoder
-    dec_inputs = sentences_emb[:, :-1].transpose(1, 0)
-    dec_targets = sentences[:, 1:].transpose(1, 0)
-    max_len = sentences.size(1) - 1
-
-    state = self.init_state(sentences_emb.mean(1))
-    state = [(state[0] * 0).detach(), (state[1] * 0).detach()]
-    dec_cell = self.p_decoder
-    log_prob_x = []
-    for i in range(max_len):
-      dec_out, state = dec_cell(dec_inputs[i], state)
-      dec_out = dec_out[0]
-      x_logits = dec_cell.output_proj(dec_out)
-      log_prob_x_i = -F.cross_entropy(
-        x_logits, dec_targets[i], reduction='none')
-      log_prob_x.append(log_prob_x_i)
-
-    log_prob_x = torch.stack(log_prob_x).transpose(1, 0) # [max_len, batch]
-    log_prob_x = tmu.mask_by_length(log_prob_x, sent_lens)
-    nll = log_prob_x.sum(1).mean()
-    loss = -log_prob_x.sum() / sent_lens.sum()
-    out_dict['loss'] = loss.item()
-    out_dict['ppl'] = loss.exp().item()
-    out_dict['marginal'] = nll.item()
-    return loss, out_dict
-
-  def infer_marginal(self, keys, vals, 
-    sentences, sent_lens, num_sample):
-    """Marginal probability and ELBO 
-    Via importance sampling from the inference network
-    """
-    out_dict = {}
-    inspect = {}
-    batch_size = sentences.size(0)
-    device = sentences.device
-    loss = 0.
-
-    ## sentence encoding 
-    sent_mask = sentences != self.pad_id
-    sentences_emb = self.embeddings(sentences)
-    # enc_outputs.shape = [batch, max_len, state_size]
-    enc_outputs, (enc_state_h, enc_state_c) =\
-      self.q_encoder(sentences_emb, sent_lens)
-    # NOTE: max_len != sentences.size(1), max_len = max(sent_lens)
-    max_len = enc_outputs.size(1)
-    sent_mask = sent_mask[:, : max_len]
-
-    # kv encoding 
-    kv_emb, kv_enc, kv_mask = self.encode_kv(keys, vals)
-
-    ## latent template
-    # emission score = log potential
-    # [batch, max_len, latent_vocab]
-    z_emission_scores = self.z_crf_proj(enc_outputs) 
-    if(self.z_overlap_logits):
-      z_emission_scores[:, :-1] += z_emission_scores[:, 1:].clone()
-      z_emission_scores[:, 1:] += z_emission_scores[:, :-1].clone()
-
-    # entropy regularization
-    ent_z = self.z_crf.entropy(z_emission_scores, sent_lens).mean()
-    out_dict['ent_z'] = ent_z.item()
-
-    # reparameterized sampling
-    z_emission_scores = tmu.batch_repeat(z_emission_scores, num_sample)
-    sent_lens = tmu.batch_repeat(sent_lens, num_sample)
-    z_sample_ids, z_sample, z_sample_log_prob, _ = self.z_crf.rsample(
-      z_emission_scores, sent_lens, tau=0.01,
-      return_switching=False, return_prob=True)
-    z_sample_emb = tmu.seq_gumbel_encode(z_sample, z_sample_ids, 
-      self.z_embeddings, gumbel_st=True)
-
-    # decoding
-    sentences = sentences[:, : max_len]
-    sentences = tmu.batch_repeat(sentences, num_sample)
-    keys = tmu.batch_repeat(keys, num_sample)
-    kv_emb = tmu.batch_repeat(kv_emb, num_sample)
-    kv_enc = tmu.batch_repeat(kv_enc, num_sample)
-    kv_mask = tmu.batch_repeat(kv_mask, num_sample)
-    p_log_prob, p_log_prob_casewise, p_log_prob_x, p_log_prob_z, z_acc, _ =\
-      self.decode_train(
-        z_sample_ids, z_sample_emb, sent_lens,
-        keys, kv_emb, kv_enc, kv_mask, sentences, x_lambd=0)
-    out_dict['p_log_prob_x'] = p_log_prob_x.item()
-    out_dict['p_log_prob_z'] = p_log_prob_z.item()
-    out_dict['z_acc'] = z_acc.item()
-    
-    # elbo 
-    elbo = (p_log_prob_casewise - z_sample_log_prob).mean()
-    out_dict['elbo'] = elbo.item()
-
-    # marginal prob
-    p_log_prob_casewise = p_log_prob_casewise.view(batch_size, num_sample)
-    out_dict['p_log_prob'] = p_log_prob_casewise.mean().item()
-    z_sample_log_prob = z_sample_log_prob.view(batch_size, num_sample)
-    out_dict['z_sample_log_prob'] = z_sample_log_prob.mean().item()
-    marginal = torch.logsumexp(p_log_prob_casewise - z_sample_log_prob, 1)
-    marginal = marginal - np.log(num_sample)
-    sent_lens = sent_lens.view(batch_size, num_sample)[:, 0].view(batch_size)
-    ppl = (-marginal / sent_lens.float()).mean().exp()
-    out_dict['ppl'] = ppl.item()
-    out_dict['marginal'] = marginal.mean().item()
-    return out_dict
-
-
-  def prepare_dec_io(self, 
-    z_sample_ids, z_sample_emb, sentences, x_lambd):
-    """Prepare the decoder output g based on the inferred z from the CRF 
-
-    Args:
-      x_lambd: word dropout ratio. 1 = all dropped
-
-    Returns:
-      dec_inputs
-      dec_targets_x
-      dec_targets_z
-    """
-    batch_size = sentences.size(0)
-    max_len = sentences.size(1)
-    device = sentences.device
-
-    sent_emb = self.embeddings(sentences)
-    z_sample_emb[:, 0] *= 0. # mask out z[0]
-
-    # word dropout ratio = x_lambd. 0 = no dropout, 1 = all drop out
-    m = Uniform(0., 1.)
-    mask = m.sample([batch_size, max_len]).to(device)
-    mask = (mask > x_lambd).float().unsqueeze(2)
-
-    dec_inputs = z_sample_emb + sent_emb * mask
-    dec_inputs = dec_inputs[:, :-1]
-
-    dec_targets_x = sentences[:, 1:]
-    dec_targets_z = z_sample_ids[:, 1:]
-    return dec_inputs, dec_targets_x, dec_targets_z
 
   def decode_train(self, 
     z_sample_ids, z_sample_emb, sent_lens,
@@ -1006,3 +724,34 @@ class LatentTemplateCRFAR(nn.Module):
       decoded_score.append(scores_result)
         
     return decoded_batch, decoded_states, decoded_score
+
+  def prepare_dec_io(self, 
+    z_sample_ids, z_sample_emb, sentences, x_lambd):
+    """Prepare the decoder output g based on the inferred z from the CRF 
+
+    Args:
+      x_lambd: word dropout ratio. 1 = all dropped
+
+    Returns:
+      dec_inputs
+      dec_targets_x
+      dec_targets_z
+    """
+    batch_size = sentences.size(0)
+    max_len = sentences.size(1)
+    device = sentences.device
+
+    sent_emb = self.embeddings(sentences)
+    z_sample_emb[:, 0] *= 0. # mask out z[0]
+
+    # word dropout ratio = x_lambd. 0 = no dropout, 1 = all drop out
+    m = Uniform(0., 1.)
+    mask = m.sample([batch_size, max_len]).to(device)
+    mask = (mask > x_lambd).float().unsqueeze(2)
+
+    dec_inputs = z_sample_emb + sent_emb * mask
+    dec_inputs = dec_inputs[:, :-1]
+
+    dec_targets_x = sentences[:, 1:]
+    dec_targets_z = z_sample_ids[:, 1:]
+    return dec_inputs, dec_targets_x, dec_targets_z

@@ -5,7 +5,6 @@ import copy
 import numpy as np 
 
 from modeling import torch_model_utils as tmu
-from modeling.rnnlm import RNNLM
 
 from torch import nn 
 from torch.optim import Adam, SGD, RMSprop
@@ -46,10 +45,7 @@ class Controller(object):
     self._dataset = dataset
     self.model_name = config.model_name
     self.model_version = config.model_version
-    self.inspect_model = config.inspect_model
-    self.inspect_grad = config.inspect_grad
     self.dataset = config.dataset
-    self.task = config.task
 
     self.is_test = config.is_test
 
@@ -78,11 +74,7 @@ class Controller(object):
     self.x_lambd_start_epoch = config.x_lambd_start_epoch
     self.x_lambd_anneal_epoch = config.x_lambd_anneal_epoch
     self.num_sample = config.num_sample
-    self.num_sample_rl = config.num_sample_rl
-    self.num_sample_nll = config.num_sample_nll
     self.max_dec_len = config.max_dec_len
-
-    self.num_sample_nll = config.num_sample_nll
 
     self.temp_rank_strategy = config.temp_rank_strategy
     self.decode_strategy = config.decode_strategy
@@ -128,26 +120,13 @@ class Controller(object):
       weight_factor=1.2,
       stemming=True)
 
-    # if('ppl' in self.validation_scores):
-    #   print('Loading rmmln .. ')
-    #   self.lm = RNNLM(config)
-    #   checkpoint = torch.load(config.lm_pretrained_path)
-    #   self.lm.load_state_dict(checkpoint['model_state_dict'])
-    #   self.lm.to(config.device)
-    #   self.lm.eval()
     return 
 
   def save(self, model, ei):
     """Save the model after epoch"""
-    # TODO: different save function for different models 
-    # (if using seperate optimizers)
 #     save_path = self.model_path + 'ckpt_e%d' % ei
     save_path = self.model_path + 'best'
     print('Saving the model at: %s' % save_path)
-#     torch.save(
-#       {'model_state_dict': model.state_dict(), 
-#         'optimizer_state_dict': model.optimizer.state_dict()}, 
-#       save_path)
     torch.save(
       {'model_state_dict': model.state_dict(), 
         'optimizer_state_dict': model.optimizer.state_dict(), 
@@ -239,13 +218,6 @@ class Controller(object):
           # print the average metrics starting from current epoch 
           self.logger.print()
           tmu.print_grad(model) 
-
-          if(self.inspect_model):
-            dataset.print_inspect(out_dict['inspect'], batch, self.model_name)
-
-          # if(self.inspect_grad):
-          #   out_dict = model.inspect_grad(batch, n_iter, ei, bi, self.schedule_params)
-          #   self.logger.update(out_dict)
 
         if(bi % (self.print_interval // 5) == 0):
           print('.', end=' ', flush=True)
@@ -340,11 +312,7 @@ class Controller(object):
       out_dict = model.valid_step(self.template_manager, batch, n_iter, ei, bi,
         mode, dataset, self.schedule_params)
 
-      if(self.task == 'density' and self.model_name == 'latent_temp_crf' and
-        self.dataset == 'e2e'):
-        batch = batch[1]
-      if(self.dataset == 'e2e'):
-        dataset.post_process(batch, out_dict)
+      dataset.post_process(batch, out_dict)
 
       for n in out_dict:
         if(n in scores): scores[n].append(out_dict[n])
@@ -355,17 +323,6 @@ class Controller(object):
 
       if('references' in batch):
         refs.extend(batch['references'])
-
-      # if('predictions_all' in out_dict):
-      #   if( (self.model_name == 'latent_temp_crf' and 
-      #       self.temp_rank_strategy in ['random', 'topk'])
-      #       or 
-      #       self.model_name in ['gaussian_vae', 'seq2seq', 'kv2seq']):
-      #     if(hyps_self is None): hyps_self = out_dict['predictions_all'][:, 0]
-      #     else: 
-      #       hyps_self = np.concatenate(
-      #         [hyps_self, out_dict['predictions_all'][:, 0]], axis=0)
-      #     refs_self.extend(out_dict['predictions_all'][:, 1:])
       
       if('sentences' in batch and self.dataset == 'mscoco'):
         if(refs_self is None): 
@@ -375,10 +332,6 @@ class Controller(object):
 
       if(bi % 20 == 0): 
         print('.', end=' ', flush=True)
-
-#       if('predictions' in out_dict):
-#         dataset.print_batch(
-#           batch, out_dict, self.model_name, fd, fd_full)
       
     fd.close()
     if(self.write_full): fd_full.close()
@@ -407,10 +360,6 @@ class Controller(object):
         if(isinstance(scores[n], float)):
           tensorboard_writer.add_scalar(mode + '/' + n, scores[n], n_iter)
 
-      
-#     print('')
-#     if('predictions' in out_dict and mode == 'dev'):
-#       dataset.print_batch(batch, out_dict, self.model_name)
     print('validation finished, time: %.2f' % (time() - start_time))
 
     scores['epoch'] = ei 

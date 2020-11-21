@@ -43,6 +43,3 @@ class DatasetBase(object):
 
   def next_batch(self, setname, batch_size):
     return 
-
-  def print_batch(self, batch, fd):
-    return 

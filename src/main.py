@@ -13,14 +13,9 @@ from modeling import torch_model_utils as tmu
 from controller import Controller
 from config import Config
 
-from modeling.latent_temp_crf_model import LatentTemplateCRFModel
-from modeling.latent_temp_crf_rl_model import LatentTemplateCRFRLModel
 from modeling.latent_temp_crf_ar_model import LatentTemplateCRFARModel
-from modeling.rnnlm import RNNLMModel
 
-from data_utils.dataset_e2e import DatasetE2E
-from data_utils.dataset_ptb import DatasetPTB
-from data_utils.dataset_mscoco import DatasetMSCOCO
+from data_utils.dataset import Dataset
 
 import pickle
 
@@ -43,8 +38,14 @@ def define_argument(config):
     "--model_version", default=config.model_version, type=str)
   parser.add_argument(
     "--dataset", default=config.dataset, type=str)
+    
+  # dataset len
   parser.add_argument(
-    "--task", default=config.task, type=str)
+    "--max_dec_len", default=config.max_dec_len, type=int)
+  parser.add_argument(
+    "--max_bow_len", default=config.max_bow_len, type=int)
+  parser.add_argument(
+    "--max_mem_len", default=config.max_mem_len, type=int)
 
   # train
   parser.add_argument(
@@ -69,7 +70,7 @@ def define_argument(config):
     "--validate_start_epoch", default=config.validate_start_epoch, type=int)
   parser.add_argument(
     "--validation_criteria", 
-    default=config.validation_criteria[config.model_name], type=str)
+    default=config.validation_criteria, type=str)
   parser.add_argument(
     "--num_epoch", default=config.num_epoch, type=int)
   parser.add_argument(
@@ -84,12 +85,6 @@ def define_argument(config):
   parser.add_argument(
     "--save_temp", type=str2bool, 
     nargs='?', const=True, default=config.save_temp)
-  parser.add_argument(
-    "--inspect_model", type=str2bool, 
-    nargs='?', const=True, default=config.inspect_model)
-  parser.add_argument(
-    "--inspect_grad", type=str2bool, 
-    nargs='?', const=True, default=config.inspect_grad)
 
   # optimization
   parser.add_argument(
@@ -110,13 +105,7 @@ def define_argument(config):
   parser.add_argument(
     "--z_sample_method", default=config.z_sample_method, type=str)
   parser.add_argument(
-    "--z_lambd", default=config.z_lambd, type=float)
-  parser.add_argument(
     "--z_beta", default=config.z_beta, type=float)
-  parser.add_argument(
-    "--z_gamma", default=config.z_gamma, type=float)
-  parser.add_argument(
-    "--z_b0", default=config.z_b0, type=float)
   parser.add_argument(
     "--z_overlap_logits", type=str2bool, 
     nargs='?', const=True, default=config.z_overlap_logits)  
@@ -124,19 +113,6 @@ def define_argument(config):
     "--z_tau_final", default=config.z_tau_final, type=float)
   parser.add_argument(
     "--tau_anneal_epoch", type=int, default=config.tau_anneal_epoch)  
-  parser.add_argument(
-    "--latent_baseline", default=config.latent_baseline, type=str)
-  parser.add_argument(
-    "--num_sample_rl", default=config.num_sample_rl, type=int)
-  parser.add_argument(
-    "--num_sample_nll", default=config.num_sample_nll, type=int)
-  parser.add_argument(
-    "--stepwise_reward", type=str2bool, 
-    nargs='?', const=True, default=config.stepwise_reward)  
-  parser.add_argument(
-    "--reward_level", type=str, default=config.reward_level)
-  parser.add_argument(
-    "--grad_estimator", type=str, default=config.grad_estimator)
   parser.add_argument(
     "--gumbel_st", type=str2bool, 
     nargs='?', const=True, default=config.gumbel_st)  
@@ -200,7 +176,7 @@ def define_argument(config):
     "--pr", type=str2bool, 
     nargs='?', const=True)
   parser.add_argument(
-    "--pr_lambd", default=config.z_gamma, type=float)
+    "--pr_lambd", default=config.pr_lambd, type=float)
   
 
   args = parser.parse_args()
@@ -224,10 +200,6 @@ def set_argument(config, args):
 
   ## overwrite the default configuration  
   config.overwrite(args)
-  config.max_dec_len = config.max_dec_len[config.dataset]
-  config.max_sent_len = config.max_sent_len[config.dataset]
-  config.max_bow_len = config.max_bow_len[config.dataset]
-  config.validation_scores = config.validation_scores[config.model_name]
   config.embedding_size = config.state_size
 
   if(config.test_validate): 
@@ -269,6 +241,12 @@ def set_argument(config, args):
   config.output_path = output_path + '/'
   config.tensorboard_path = tensorboard_path + '/'
   
+  config.data_path = {
+    'train': config.data_root + config.dataset + '/trainset.csv', 
+    'dev': config.data_root + config.dataset + '/devset.csv', 
+    'test': config.data_root + config.dataset + '/testset_w_refs.csv',
+    }
+  
   config.write_arguments()
 
   ## set gpu 
@@ -284,51 +262,20 @@ def main():
   config = Config()
   args = define_argument(config)
   config = set_argument(config, args)
-
+  
   # dataset
-  if(config.dataset == 'e2e'):
-    dataset = DatasetE2E(config)
-    dataset.build()
-    config.key_vocab_size = dataset.key_vocab_size
-  elif(config.dataset == 'ptb'):
-    dataset = DatasetPTB(config)
-    dataset.build()
-  elif(config.dataset == 'mscoco'):
-    dataset = DatasetMSCOCO(config)
-    dataset.build()
-  else: 
-    raise NotImplementedError('dataset %s not implemented' % config.dataset)
+  dataset = Dataset(config)
+  dataset.build()
+  config.key_vocab_size = dataset.key_vocab_size
   config.vocab_size = dataset.vocab_size
+    
   # debug
   with open(config.output_path + 'id2word.txt', 'w') as fd:
     for i in dataset.id2word: fd.write('%d %s\n' % (i, dataset.id2word[i]))
 
   # model 
-  # if(config.model_name == 'kv2seq'): 
-  #   model = KV2Seq(config)
-  if(config.model_name == 'latent_temp_crf'):
-    model = LatentTemplateCRFModel(config)
-  # elif(config.model_name == 'latent_temp_crf_ts'):
-  #   model = LatentTemplateCRFTS(config)
-  elif(config.model_name == 'latent_temp_crf_ar'):
-    model = LatentTemplateCRFARModel(config)
-  elif(config.model_name == 'latent_temp_crf_rl'):
-    model = LatentTemplateCRFRLModel(config)
-  # elif(config.model_name == 'autodecoder'):
-  #   model = AutoDecoder(config)
-  elif(config.model_name == 'rnnlm'):
-    model = RNNLMModel(config)
-  # elif(config.model_name == 'gaussian_vae'):
-  #   model = GaussianVAE(config)
-  # elif(config.model_name == 'seq2seq'):
-  #   model = Seq2seq(config)
-  else: 
-    raise NotImplementedError('model %s not implemented!' % config.model_name)  
+  model = LatentTemplateCRFARModel(config) 
   tmu.print_params(model)
-  # return 
-    
-#   pickle.dump(dataset, open("dataset.pkl", "wb"))
-#   pickle.dump(config, open("config.pkl", "wb"))
 
   # controller
   controller = Controller(config, model, dataset)
@@ -342,7 +289,6 @@ def main():
   else:
     print('Loading model from: %s' % config.all_pretrained_path)
     checkpoint = torch.load(config.all_pretrained_path)
-    # tmu.load_partial_state_dict(model, checkpoint['model_state_dict'])
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(config.device)
     ckpt_e = int(config.all_pretrained_path.split('_')[-1][1:])
