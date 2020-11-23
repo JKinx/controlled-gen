@@ -8,6 +8,7 @@ from .semirings import (
     LogSemiring,
     CheckpointSemiring,
     CheckpointShardSemiring,
+    GumbelCRFSemiring,
     KMaxSemiring,
     SparseMaxSemiring,
     MaxSemiring,
@@ -509,3 +510,16 @@ def test_lc_custom():
     # s2 = struct.sum(vals)
     # assert torch.isclose(s, s2).all()
     # assert torch.isclose(marginals, marginals2).all()
+
+@given(data())
+def test_gumbel(data):
+    model = data.draw(sampled_from([LinearChain, SemiMarkov, DepTree]))
+    K = 2
+    semiring = GumbelCRFSemiring(1.0)
+    struct = model(semiring)
+    vals, (batch, N) = model._rand()
+    vals.requires_grad_(True)
+    alpha = struct.marginals(vals)
+    print(alpha[0])
+    print(torch.autograd.grad(alpha, vals, alpha.detach())[0][0])
+    

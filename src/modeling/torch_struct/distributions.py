@@ -11,11 +11,14 @@ from .semirings import (
     LogSemiring,
     MaxSemiring,
     EntropySemiring,
+    CrossEntropySemiring,
+    KLDivergenceSemiring,
     MultiSampledSemiring,
     KMaxSemiring,
     StdSemiring,
-    GumbelSoftmaxSemiring,
+    GumbelCRFSemiring
 )
+
 
 
 class StructDistribution(Distribution):
@@ -66,6 +69,8 @@ class StructDistribution(Distribution):
             value.type_as(self.log_potentials),
             batch_dims=batch_dims,
         )
+
+
         return v - self.partition
 
     @lazy_property
@@ -76,13 +81,32 @@ class StructDistribution(Distribution):
         Returns:
             entropy (*batch_shape*)
         """
+
         return self._struct(EntropySemiring).sum(self.log_potentials, self.lengths)
+
+    def cross_entropy(self, other):
+        """
+        Compute cross-entropy for distribution p(self) and q(other) :math:`H[p, q]`.
+
+        Returns:
+            cross entropy (*batch_shape*)
+        """
+
+        return self._struct(CrossEntropySemiring).sum([self.log_potentials, other.log_potentials], self.lengths)
+
+    def kl(self, other):
+        """
+        Compute KL-divergence for distribution p(self) and q(other) :math:`KL[p || q] = H[p, q] - H[p]`.
+
+        Returns:
+            cross entropy (*batch_shape*)
+        """
+        return self._struct(KLDivergenceSemiring).sum([self.log_potentials, other.log_potentials], self.lengths)
 
     @lazy_property
     def max(self):
         r"""
         Compute an max for distribution :math:`\max p(z)`.
-
         Returns:
             max (*batch_shape*)
         """
@@ -142,10 +166,20 @@ class StructDistribution(Distribution):
     @lazy_property
     def count(self):
         "Compute the log-partition function."
+        ones = torch.ones_like(self.log_potentials)
+        ones[self.log_potentials.eq(-float('inf'))] = 0
         return self._struct(StdSemiring).sum(
-            torch.ones_like(self.log_potentials), self.lengths
+            ones, self.lengths
         )
 
+
+    def gumbel_crf(self, temperature=1.0):
+        with torch.enable_grad():
+            st_gumbel = self._struct(GumbelCRFSemiring(temperature)).marginals(
+                self.log_potentials, self.lengths
+            )
+            return st_gumbel
+                
     # @constraints.dependent_property
     # def support(self):
     #     pass
@@ -182,31 +216,6 @@ class StructDistribution(Distribution):
             samples.append(tmp_sample)
         return torch.stack(samples)
 
-    def rsample(self, sample_shape=torch.Size(), temp=1.):
-        r"""
-        Compute the reparameterized structured samples from the distribution 
-        :math:`z \sim p(z)`.
-
-        Parameters:
-            sample_shape (int): number of samples
-
-        Returns:
-            samples (*sample_shape x batch_shape x event_shape*)
-        """
-        assert len(sample_shape) == 1
-        nsamples = sample_shape[0]
-        samples = []
-        for k in range(nsamples):
-            if k % 10 == 0:
-                sample = self._struct(GumbelSoftmaxSemiring(temp)).marginals(
-                    self.log_potentials, lengths=self.lengths
-                )
-                sample = sample.detach()
-            # tmp_sample = GumbelSoftmaxSemiring(temp).to_discrete(sample, (k % 10) + 1)
-            tmp_sample = sample
-            samples.append(tmp_sample)
-        return torch.stack(samples)
-
     def to_event(self, sequence, extra, lengths=None):
         "Convert simple representation to event."
         return self.struct.to_parts(sequence, extra, lengths=None)
@@ -232,7 +241,7 @@ class StructDistribution(Distribution):
     def _struct(self, sr=None):
         return self.struct(sr if sr is not None else LogSemiring)
 
-
+    
 class LinearChainCRF(StructDistribution):
     r"""
     Represents structured linear-chain CRFs with C classes.
@@ -373,7 +382,11 @@ class DependencyCRF(StructDistribution):
 
     """
 
-    struct = DepTree
+    def __init__(self, log_potentials, lengths=None, args={}, multiroot=True):
+        super(DependencyCRF, self).__init__(log_potentials, lengths, args)
+        self.struct = DepTree
+        setattr(self.struct, "multiroot", multiroot)
+
 
 
 class TreeCRF(StructDistribution):
