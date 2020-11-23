@@ -10,7 +10,8 @@ from torch.distributions import Uniform
 
 from .lstm_seq2seq.encoder import LSTMEncoder
 from .lstm_seq2seq.decoder import LSTMDecoder, Attention
-from .structure.linear_crf import LinearChainCRF
+# from .structure.linear_crf import LinearChainCRF
+from .structure.linear_crf_ts import LinearChainCRF
 from . import torch_model_utils as tmu
 import operator
 
@@ -26,8 +27,6 @@ class LatentTemplateCRFAR(nn.Module):
 
     self.z_beta = config.z_beta
     self.z_overlap_logits = config.z_overlap_logits
-    self.z_sample_method = config.z_sample_method
-    self.gumbel_st = config.gumbel_st
     self.use_src_info = config.use_src_info
     self.use_copy = config.use_copy
     self.num_sample = config.num_sample
@@ -172,28 +171,11 @@ class LatentTemplateCRFAR(nn.Module):
     out_dict['ent_z_loss'] = self.z_beta * tmu.to_np(ent_z)
 
     # reparameterized sampling
-    if(self.z_sample_method == 'gumbel_ffbs'):
-      z_sample_ids, z_sample, _ = self.z_crf.rsample(
-        z_emission_scores, sent_lens, tau, return_switching=True)
-    elif(self.z_sample_method == 'pm'):
-      z_sample_ids, z_sample = self.z_crf.pmsample(
-        z_emission_scores, sent_lens, tau)
-    else:
-      raise NotImplementedError(
-        'z_sample_method %s not implemented!' % self.z_sample_method)
-
-    z_sample_max, _ = z_sample.max(dim=-1)
-    z_sample_max = z_sample_max.masked_fill(~sent_mask, 0)
-    inspect['z_sample_max'] = (z_sample_max.sum() / sent_mask.sum()).item()
-    out_dict['z_sample_max'] = inspect['z_sample_max']
-
-    # NOTE: although we use 0 as mask here, 0 is ALSO a valid state 
-    z_sample_ids.masked_fill_(~sent_mask, 0) 
-    z_sample_ids_out = z_sample_ids.masked_fill(~sent_mask, -1)
-    out_dict['z_sample_ids'] = tmu.to_np(z_sample_ids_out)
-    inspect['z_sample_ids'] = tmu.to_np(z_sample_ids_out)
-    z_sample_emb = tmu.seq_gumbel_encode(z_sample, z_sample_ids,
-      self.z_embeddings, self.gumbel_st)
+    z_sample = self.z_crf.rsample(z_emission_scores, sent_lens, tau)
+    print(z_sample.shape)
+    z_sample_ids = z_sample.argmax(-1)
+    print(z_sample_ids.shape)
+    z_sample_emb = z_sample @ self.z_embeddings.weight
 
     # decoding
     sentences = sentences[:, : max_len]
@@ -224,17 +206,13 @@ class LatentTemplateCRFAR(nn.Module):
 
     out_dict['loss'] = tmu.to_np(loss)
     out_dict['inspect'] = inspect
+    
+    print("end")
     return loss, out_dict
 
   def compute_pr(self, emission_scores, zcs, sent_mask, sent_lens):
-    # edge potentials
-    all_scores = self.z_crf.calculate_all_scores(emission_scores)
-    
-    # Linear Chain CRF
-    dist = LC(all_scores.transpose(3,2), (sent_lens + 1).float())
-    
     # marginals : [batch, max_len, state_size]
-    marginals = dist.marginals.sum(-1)
+    marginals = self.z_crf.marginals(emission_scores, sent_lens)
     rel_marginals = marginals[:, :, :self.num_pr_constraints]
     
     # filters for the constrained z states

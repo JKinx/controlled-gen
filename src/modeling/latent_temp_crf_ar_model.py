@@ -46,7 +46,6 @@ class LatentTemplateCRFARModel(FTModel):
       return_grad=False,
       zcs=torch.from_numpy(batch['zcs']).to(self.device),
       )
-
     loss.backward()
     clip_grad_norm_(model.parameters(), self.max_grad_norm)
     self.optimizer.step()
