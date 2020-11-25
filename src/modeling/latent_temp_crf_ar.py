@@ -10,12 +10,9 @@ from torch.distributions import Uniform
 
 from .lstm_seq2seq.encoder import LSTMEncoder
 from .lstm_seq2seq.decoder import LSTMDecoder, Attention
-# from .structure.linear_crf import LinearChainCRF
 from .structure.linear_crf_ts import LinearChainCRF
 from . import torch_model_utils as tmu
 import operator
-
-from .torch_struct import LinearChainCRF as LC
 
 class LatentTemplateCRFAR(nn.Module):
   """The latent template CRF autoregressive version, table to text setting"""
@@ -172,9 +169,7 @@ class LatentTemplateCRFAR(nn.Module):
 
     # reparameterized sampling
     z_sample = self.z_crf.rsample(z_emission_scores, sent_lens, tau)
-    print(z_sample.shape)
     z_sample_ids = z_sample.argmax(-1)
-    print(z_sample_ids.shape)
     z_sample_emb = z_sample @ self.z_embeddings.weight
 
     # decoding
@@ -206,8 +201,7 @@ class LatentTemplateCRFAR(nn.Module):
 
     out_dict['loss'] = tmu.to_np(loss)
     out_dict['inspect'] = inspect
-    
-    print("end")
+
     return loss, out_dict
 
   def compute_pr(self, emission_scores, zcs, sent_mask, sent_lens):
