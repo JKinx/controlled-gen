@@ -484,6 +484,45 @@ class LatentTemplateCRFAR(nn.Module):
     
     return fstates
 
+  def posterior_infer(self, keys, vals, sentences, sent_lens):
+    """Find the argmax for z given x and y
+    
+    Args:
+      keys: torch.tensor(torch.long), size=[batch, max_mem_len]
+      vals: torch.tensor(torch.long), size=[batch, max_mem_len]
+      sentences: torch.tensor(torch.long), size=[batch, sent_len]
+      sent_lens: torch.tensor(torch.long), size=[batch]
+
+    Returns:
+      argmax x for each sample
+    """
+    device = sentences.device
+    loss = 0.
+
+    ## sentence encoding 
+    sent_mask = sentences != self.pad_id
+    sentences_emb = self.embeddings(sentences)
+    # enc_outputs.shape = [batch, max_len, state_size]
+    enc_outputs, (enc_state_h, enc_state_c) =\
+      self.q_encoder(sentences_emb, sent_lens)
+    # NOTE: max_len != sentences.size(1), max_len = max(sent_lens)
+    max_len = enc_outputs.size(1)
+    sent_mask = sent_mask[:, : max_len]
+
+    # kv encoding 
+    kv_emb, kv_enc, kv_mask = self.encode_kv(keys, vals)
+
+    ## latent template
+    # emission score = log potential
+    # [batch, max_len, latent_vocab]
+    z_emission_scores = self.z_crf_proj(enc_outputs) 
+    if(self.z_overlap_logits):
+      z_emission_scores[:, :-1] += z_emission_scores[:, 1:].clone()
+      z_emission_scores[:, 1:] += z_emission_scores[:, :-1].clone()
+    
+    out = self.z_crf.argmax(z_emission_scores, sent_lens)
+    return out.tolist()
+
   def decode_infer2(self, mem, mem_emb, mem_enc, mem_mask, templates):
     """Inference
 
