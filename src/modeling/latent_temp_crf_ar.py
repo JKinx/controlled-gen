@@ -80,6 +80,11 @@ class LatentTemplateCRFAR(nn.Module):
     self.pr_lambd = config.pr_lambd
     self.num_pr_constraints = config.num_pr_constraints
     
+    # constraints for beam search
+    self.locked_zs = [0,1,2]
+    self.key_ys = {0 : config.word2id["_ndend_"],
+                    1 : config.word2id["_odend_"],
+                    2 : config.word2id["_mend_"]}
     return 
 
   def init_state(self, s):
@@ -558,6 +563,8 @@ class LatentTemplateCRFAR(nn.Module):
             
           nextnodes = []
         
+          
+        
           for prev_fstates in fstates[fstate_idx]["prev_fstates"]:
             prev_fstate_count += 1
             prev_nodes += fstates[prev_fstates]["nodes"]
@@ -593,12 +600,22 @@ class LatentTemplateCRFAR(nn.Module):
             
             state_logp = torch.log_softmax(z_logits, dim=-1)
             
-            if fstates[fstate_idx]["fixed"]:
-              state_id = fstates[fstate_idx]["state_vocab"]
+            prev_state = n_top["state_id"]
+            prev_word = n_top["wordid"]
+            
+            if prev_state in self.locked_zs and prev_word != self.key_ys[prev_state]:
+              if fstates[fstate_idx]["fixed"] and fstates[fstate_idx]["state_vocab"] != prev_state:
+                continue
+              state_id = prev_state
               log_prob = state_logp[:,state_id:state_id+1]
               indexes = torch.tensor([[[state_id]]]).to(self.device)
-            else:
-              log_prob, indexes = torch.topk(state_logp, beam_w_)
+            else: 
+              if fstates[fstate_idx]["fixed"]:
+                state_id = fstates[fstate_idx]["state_vocab"]
+                log_prob = state_logp[:,state_id:state_id+1]
+                indexes = torch.tensor([[[state_id]]]).to(self.device)
+              else:
+                log_prob, indexes = torch.topk(state_logp, beam_w_)
             
             next_zs.append(indexes.view(-1).tolist())
             score_zs.append((n_top['logp'] + log_prob.view(-1)).tolist())

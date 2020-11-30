@@ -77,7 +77,7 @@ class LSTMEncoder(nn.Module):
     enc_init_state = self.init_state(batch_size)
 
     enc_inputs = self.dropout(enc_inputs)
-    enc_inputs = pack_padded_sequence(enc_inputs, enc_lens, batch_first=True,
+    enc_inputs = pack_padded_sequence(enc_inputs, enc_lens.cpu(), batch_first=True,
       enforce_sorted=False)
     enc_outputs, enc_state = self.cell(enc_inputs, enc_init_state)
     enc_outputs, _ = pad_packed_sequence(enc_outputs, batch_first=True) 
