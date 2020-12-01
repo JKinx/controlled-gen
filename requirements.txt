@@ -1,4 +1,5 @@
+pytorch
 py-rouge
-tensorboardX
 tqdm
 nltk
+num2words
