@@ -45,6 +45,23 @@ def normalize_set(dset, word2id, max_sent_len, max_mem_len, word2id_zcs):
 
   return set_keys, set_vals, set_lens, sentences, templates, sent_lens, zcs
 
+def normalize_kv(data_kvs, word2id, max_mem_len):
+    set_keys, set_vals = [], []
+    for tb in data_kvs:
+        keys = [k for k, _ in tb]
+        set_keys.append(keys)
+        vals = [v for _, v in tb]
+        set_vals.append(vals)
+    set_keys, set_lens = nlpp.normalize(
+    set_keys, word2id, max_mem_len, add_start_end=False)
+    set_vals, _ = nlpp.normalize(
+    set_vals, word2id, max_mem_len, add_start_end=False)
+    return set_keys, set_vals, set_lens
+
+def normalize_sent(data_sents, word2id, max_sent_len):
+    return nlpp.normalize(data_sents, word2id, max_sent_len, add_start_end=False)
+    
+
 def read_data(dpath):
   """Read the raw e2e data
   
@@ -296,6 +313,23 @@ class Dataset(DatasetBase):
                         'zcs' : test_zcs}
                       }
     return 
+
+  def batch_kv(self, kv_list):
+    keys, vals, mem_lens = normalize_kv(kv_list, self.word2id,
+                                                self.max_mem_len)
+    kv_batch = {"keys" : np.array(keys),
+                "vals" : np.array(vals),
+                "mem_lens" : np.array(mem_lens)}
+    
+    return kv_batch
+
+  def batch_sent(self, sent_list):
+    sentences, sent_lens = normalize_sent(sent_list, self.word2id,
+                                                self.max_sent_len)
+    kv_batch = {"sentences" : np.array(sentences),
+                "sent_lens" : np.array(sent_lens)}
+    
+    return kv_batch
 
   def next_batch_train(self, setname, ptr, batch_size):
     sentences = self._dataset[setname]['sentences'][ptr: ptr + batch_size]

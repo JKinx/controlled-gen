@@ -520,8 +520,38 @@ class LatentTemplateCRFAR(nn.Module):
       z_emission_scores[:, :-1] += z_emission_scores[:, 1:].clone()
       z_emission_scores[:, 1:] += z_emission_scores[:, :-1].clone()
     
-    out = self.z_crf.argmax(z_emission_scores, sent_lens)
-    return out.tolist()
+    out = self.z_crf.argmax(z_emission_scores, sent_lens).tolist()
+    out_list = [out[i][:sent_lens[i].item()] for i in range(len(out))]
+    return out_list
+  
+  def infer2(self, keys, vals, templates):
+    """Latent template inference step
+
+    Args:
+      keys: size=[batch, mem_len]
+      vals: size=[batch, mem_len]
+      z: size=[batch, num_sample, max_len]
+      z_lens: size=[batch, num_sample]
+
+    Returns:
+      out_dict
+    """
+    out_dict = {}
+    batch_size = keys.size(0)
+    mem_len = keys.size(1)
+    state_size = self.state_size
+    device = keys.device
+
+    # kv encoding 
+    kv_emb, kv_enc, kv_mask = self.encode_kv(keys, vals)
+
+    # decoding 
+    pred_y, pred_z, pred_score = self.decode_infer2(vals, kv_emb, kv_enc,
+                                                      kv_mask, templates)
+    out_dict['pred_y'] = pred_y
+    out_dict['pred_z'] = pred_z
+    out_dict['pred_score'] = pred_score
+    return out_dict
 
   def decode_infer2(self, mem, mem_emb, mem_enc, mem_mask, templates):
     """Inference
@@ -778,8 +808,12 @@ class LatentTemplateCRFAR(nn.Module):
       decoded_batch.append(utterances_w)
       decoded_states.append(utterances_s)
       decoded_score.append(scores_result)
+    
+    pred_y = [el[0][1:-1] for el in decoded_batch]
+    pred_z = [el[0][1:-1] for el in decoded_states]
+    pred_score = [el[0] for el in decoded_score]
         
-    return decoded_batch, decoded_states, decoded_score
+    return pred_y, pred_z, pred_score
 
   def prepare_dec_io(self, 
     z_sample_ids, z_sample_emb, sentences, x_lambd):
