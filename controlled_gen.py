@@ -5,7 +5,7 @@ import pickle
 
 class ControlledGen:
     def __init__(self, model_name="dateSet", device="cuda"):
-        loaded = pickle.load(open("../dateSet/best", "rb"))
+        loaded = pickle.load(open("dateSet/best", "rb"))
         self.config = loaded["config"]
         self.config.device = device
 

@@ -1,19 +1,11 @@
 from controlled_gen import ControlledGen
 import argparse
-
-def str2bool(v):
-  if v.lower() in ('yes', 'true', 't', 'y', '1'):
-    return True
-  elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-    return False
-  else:
-    raise argparse.ArgumentTypeError('Boolean value expected.')
     
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('--model', type=str, required=True, help='Model Name', choices=["dateSet"])
 parser.add_argument('--api', type=str, required=True, help='Api Name', choices=["get_yz", "get_yz_templated",  "get_z"])
 parser.add_argument('--template_id', type=int, help='id of template', default=-1, choices=[0,1,2,3,4,5,6,7])
-parser.add_argument('--cuda', type=str2bool, default="True", help='Use GPU')
+parser.add_argument('--device', default="cuda", help='device for model')
 args = parser.parse_args()
 
 # make sure template is given
@@ -22,7 +14,7 @@ if args.api == "get_yz_templated":
     
 # load model
 model = ControlledGen(model_name = args.model, 
-                      device="cuda" if args.cuda else "cpu")
+                      device=args.device)
 
 x = (13, 6, 2020)
 template_list = [[7,9,0,-1,2,-1,3,-1],
@@ -34,7 +26,7 @@ template_list = [[7,9,0,-1,2,-1,3,-1],
                  [7,9,2,-1,1,-1,4,-1,3,-1],
                  [9,9,2,-1,1,-1,9,-1,3,-1],
                 ]
-y = ['today', 'is', 'the', 'thirteen', 'of', 'june', ',', '2020', '.']
+y = ['the', 'date', 'is', 'the', 'thirteen', 'of', 'june', ',', '2020', '.']
 
 print("Testing " + args.api + " for " + args.model)
 print('--'*30)
